@@ -19,7 +19,7 @@ const USER_ID = "demo-user";
 // SVG paths for each mood. Coordinates match the viewBoxes in index.html.
 // Eyes viewBox: 300x130. Mouth viewBox: 300x80.
 const EYE_SHAPES = {
-  neutral:  { l: "M40 65 Q90 20 140 65 Q90 110 40 65 Z", r: "M160 65 Q210 20 260 65 Q210 110 160 65 Z" },
+  neutral:  { l: "M40 65 Q90 24 140 65 Q90 104 40 65 Z", r: "M160 65 Q210 24 260 65 Q210 104 160 65 Z" },
   joy:      { l: "M40 75 Q90 30 140 75 Q90 60 40 75 Z", r: "M160 75 Q210 30 260 75 Q210 60 160 75 Z" }, // squint-happy
   sadness:  { l: "M40 55 Q90 30 140 55 Q90 95 40 55 Z", r: "M160 55 Q210 30 260 55 Q210 95 160 55 Z" }, // droopy
   anger:    { l: "M40 80 L140 50 L140 80 L40 90 Z",      r: "M160 50 L260 80 L260 90 L160 80 Z" },      // slanted
@@ -35,7 +35,8 @@ const PUPIL = {
   surprise: { r: 22, dy: 0,  color: "#a78bfa" },
 };
 const MOUTH = {
-  neutral:  "M60 40 Q150 40 240 40",
+  // resting face keeps a soft, friendly curve — never a dead flat line
+  neutral:  "M70 38 Q150 54 230 38",
   joy:      "M60 30 Q150 75 240 30",
   sadness:  "M60 55 Q150 15 240 55",
   anger:    "M60 45 L110 30 L150 45 L190 30 L240 45",
@@ -44,10 +45,10 @@ const MOUTH = {
 };
 // Talking wiggle keyframes
 const TALK_FRAMES = [
-  "M60 40 Q150 35 240 40",
-  "M60 40 Q150 55 240 40",
-  "M60 40 Q150 30 240 40",
-  "M60 40 Q150 48 240 40",
+  "M70 38 Q150 46 230 38",
+  "M70 38 Q150 62 230 38",
+  "M70 38 Q150 42 230 38",
+  "M70 38 Q150 56 230 38",
 ];
 
 const eyeL = document.getElementById("eye-left-lid");

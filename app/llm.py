@@ -141,11 +141,42 @@ def _mock(message: str, emotion: EmotionState, sos_level: int) -> tuple[str, str
 class _GroqProvider:
     name = "groq"
 
+    # Ordered preference of chat models. Groq rotates its lineup, so we
+    # resolve against whatever the account actually has access to.
+    _PREFERRED = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "openai/gpt-oss-120b",
+        "moonshotai/kimi-k2-instruct",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "openai/gpt-oss-20b",
+        "llama-3.1-8b-instant",
+    ]
+    _SKIP = ("whisper", "tts", "guard", "embed", "distil", "prompt")
+
     def __init__(self) -> None:
         from groq import Groq  # local import so mock mode has no hard dep
 
         self.client = Groq(api_key=_env("GROQ_API_KEY"))
-        self.model = _env("GROQ_MODEL") or "llama-3.3-70b-versatile"
+        self.model = self._resolve(_env("GROQ_MODEL") or "llama-3.3-70b-versatile")
+
+    def _resolve(self, want: str) -> str:
+        """Pick a model the account can actually use, so a rotated/renamed
+        default doesn't 404 the whole app."""
+        try:
+            available = {m.id for m in self.client.models.list().data}
+        except Exception:
+            return want  # can't list (offline/permissions) — try as-is
+        if want in available:
+            return want
+        for cand in self._PREFERRED:
+            if cand in available:
+                return cand
+        for mid in sorted(available):
+            if not any(bad in mid.lower() for bad in self._SKIP):
+                return mid
+        return want
 
     def complete(self, system: str, messages: list[dict]) -> str:
         resp = self.client.chat.completions.create(
@@ -240,5 +271,8 @@ class TherapistLLM:
             raw = self.provider.complete(_system_prompt(), msgs)
             return _parse_reply(raw)
         except Exception as exc:
+            # Keep the full error in the server log, but never dump a raw API
+            # payload into the conversation the user is looking at.
+            print(f"[mind-mate] {self.provider.name} error: {exc}", flush=True)
             reply, mood, used = _mock(message, emotion, sos_level)
-            return f"{reply}\n(fallback — {self.provider.name} error: {exc})", mood, used
+            return reply, mood, used
