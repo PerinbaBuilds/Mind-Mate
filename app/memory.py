@@ -95,6 +95,11 @@ class MemoryStore:
             )
             return int(cur.lastrowid or 0)
 
+    def wipe(self, user_id: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("DELETE FROM memory WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM crisis_log WHERE user_id = ?", (user_id,))
+
     def log_crisis(self, user_id: str, level: int, text: str) -> None:
         with self._lock, self._conn() as c:
             c.execute(

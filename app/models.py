@@ -13,8 +13,8 @@ EmotionLabel = Literal[
 
 class EmotionState(BaseModel):
     label: EmotionLabel = "neutral"
-    valence: float = Field(0.0, ge=-1.0, le=1.0)  # negative..positive
-    arousal: float = Field(0.0, ge=0.0, le=1.0)   # calm..intense
+    valence: float = Field(0.0, ge=-1.0, le=1.0)
+    arousal: float = Field(0.0, ge=0.0, le=1.0)
     confidence: float = Field(0.5, ge=0.0, le=1.0)
 
 
@@ -36,5 +36,8 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     emotion: EmotionState
+    display_mood: str = "neutral"  # what the face should show (from LLM inference)
     sos_level: int = 0
     recalled_memory: Optional[str] = None
+    used_memory: bool = False
+    provider: str = "mock"
