@@ -35,8 +35,12 @@ def _context_block(
     emotion: EmotionState,
     sos_level: int,
     recalled: Optional[MemoryItem],
+    digest: str = "",
 ) -> str:
-    lines = [
+    lines = []
+    if digest:
+        lines.append(f"[WHAT_YOU_REMEMBER_ABOUT_THEM]\n{digest}")
+    lines += [
         f"[LEXICON_EMOTION_HINT] label={emotion.label} valence={emotion.valence} arousal={emotion.arousal}",
         f"[SOS_LEVEL] {sos_level}",
     ]
@@ -56,6 +60,7 @@ def _build_messages(
     sos_level: int,
     recalled: Optional[MemoryItem],
     history: list[MemoryItem],
+    digest: str = "",
 ) -> list[dict]:
     msgs: list[dict] = []
     for item in history:
@@ -65,7 +70,9 @@ def _build_messages(
                 "content": item.text,
             }
         )
-    msgs.append({"role": "user", "content": _context_block(message, emotion, sos_level, recalled)})
+    msgs.append(
+        {"role": "user", "content": _context_block(message, emotion, sos_level, recalled, digest)}
+    )
     return msgs
 
 
@@ -178,13 +185,14 @@ class _GroqProvider:
                 return mid
         return want
 
-    def complete(self, system: str, messages: list[dict]) -> str:
+    def complete(self, system: str, messages: list[dict], json_mode: bool = True) -> str:
+        kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
         resp = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "system", "content": system}, *messages],
             temperature=0.75,
             max_tokens=350,
-            response_format={"type": "json_object"},
+            **kwargs,
         )
         return resp.choices[0].message.content or ""
 
@@ -198,7 +206,7 @@ class _AnthropicProvider:
         self.client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY"))
         self.model = _env("ANTHROPIC_MODEL") or "claude-3-5-sonnet-latest"
 
-    def complete(self, system: str, messages: list[dict]) -> str:
+    def complete(self, system: str, messages: list[dict], json_mode: bool = True) -> str:
         resp = self.client.messages.create(
             model=self.model,
             max_tokens=400,
@@ -261,12 +269,13 @@ class TherapistLLM:
         sos_level: int,
         recalled: Optional[MemoryItem],
         history: list[MemoryItem],
+        digest: str = "",
     ) -> tuple[str, str, bool]:
         """Return (reply_text, mood_label, used_memory)."""
         if self.provider is None:
             return _mock(message, emotion, sos_level)
 
-        msgs = _build_messages(message, emotion, sos_level, recalled, history)
+        msgs = _build_messages(message, emotion, sos_level, recalled, history, digest)
         try:
             raw = self.provider.complete(_system_prompt(), msgs)
             return _parse_reply(raw)
@@ -276,3 +285,70 @@ class TherapistLLM:
             print(f"[mind-mate] {self.provider.name} error: {exc}", flush=True)
             reply, mood, used = _mock(message, emotion, sos_level)
             return reply, mood, used
+
+    # -- long-term memory helpers ---------------------------------------
+
+    def summarize_session(self, turns: list[MemoryItem]) -> tuple[str, dict[str, str]]:
+        """Condense a finished conversation into a durable summary + facts."""
+        if self.provider is None or not turns:
+            return "", {}
+        transcript = "\n".join(
+            f"{'Them' if t.role == 'user' else 'You'}: {t.text}" for t in turns
+        )[:6000]
+        system = (
+            "You maintain the long-term memory of a companion app. Read the "
+            "conversation and extract what is worth remembering about this person "
+            "for future conversations.\n\n"
+            "Reply with ONE line of JSON, no markdown fences:\n"
+            '{"summary": "<2 sentences, what they talked about and how they seemed>", '
+            '"facts": {"<short_key>": "<short value>"}}\n\n'
+            "Facts should be durable things about their life: their name, ongoing "
+            "projects, people who matter to them, struggles, goals. Use short "
+            "snake_case keys like name, studies, current_project, close_people. "
+            "Only include what they actually said. Use {} if nothing durable came up."
+        )
+        try:
+            raw = self.provider.complete(system, [{"role": "user", "content": transcript}])
+            match = _JSON_RE.search(raw or "")
+            if not match:
+                return "", {}
+            j = json.loads(match.group(0))
+            summary = str(j.get("summary", "")).strip()
+            facts_raw = j.get("facts", {})
+            facts = {
+                str(k): str(v)
+                for k, v in (facts_raw.items() if isinstance(facts_raw, dict) else [])
+                if str(v).strip()
+            }
+            return summary, facts
+        except Exception as exc:
+            print(f"[mind-mate] summarize error: {exc}", flush=True)
+            return "", {}
+
+    def greeting(self, digest: str) -> str:
+        """Open a conversation. Warm and specific when we remember them."""
+        if not digest:
+            first = "Hey, I'm Mind-Mate. I'm here to listen — properly. What's going on with you today?"
+            if self.provider is None:
+                return first
+            return first
+        if self.provider is None:
+            return "Hey, you're back — good to see you. How have things been since we last talked?"
+        system = (
+            "You are Mind-Mate, a warm companion greeting someone you genuinely "
+            "care about as they come back to talk again.\n\n"
+            "Write ONE short greeting (1-2 sentences). Sound delighted they're back "
+            "and reference something specific you remember — by name if you know it. "
+            "Ask how that specific thing went. Warm and natural, like a close friend, "
+            "never clinical, never 'How can I help you today'. Plain text only, no JSON."
+        )
+        try:
+            raw = self.provider.complete(
+                system,
+                [{"role": "user", "content": f"Here is what you remember:\n{digest}"}],
+                json_mode=False,
+            )
+            return (raw or "").strip().strip('"') or "Hey, you're back — how have you been?"
+        except Exception as exc:
+            print(f"[mind-mate] greeting error: {exc}", flush=True)
+            return "Hey, you're back — good to see you. How have things been?"

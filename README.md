@@ -58,7 +58,34 @@ Memory persists across restarts because it lives in `data/mindmate.db`.
 Use the **new session** button in the header to wipe the current user's
 history when you want a clean demo.
 
-## Signature feature: contrasting memory recall
+## Signature feature: a bond that survives the session
+
+Mind-Mate is built to feel like it *knows* you, not like a fresh chatbot
+every time. Three layers make that work:
+
+| Layer               | Lives in                    | Lifetime                    |
+| ------------------- | --------------------------- | --------------------------- |
+| Conversation turns  | `memory` (per `session_id`) | the current conversation    |
+| Session summaries   | `session_summary`           | forever                     |
+| Durable profile     | `profile` (name, project…)  | forever                     |
+
+When you press **new session**, the finished conversation is condensed by
+the LLM into a two-sentence summary plus durable facts about you, and only
+*then* is a fresh conversation started. So the next greeting is specific:
+
+> *"Perinba! Good to see you back — did the processing unit ever behave itself?"*
+
+The sidebar shows exactly what it remembers, and **forget me** wipes every
+trace (the privacy escape hatch).
+
+| Endpoint             | Does                                                     |
+| -------------------- | -------------------------------------------------------- |
+| `GET /api/greeting`  | Opens a conversation, personalised if you've met before  |
+| `POST /api/new_session` | Summarises + files the old chat, starts a fresh one   |
+| `GET /api/memory`    | What Mind-Mate currently remembers about you             |
+| `POST /api/forget`   | Erase everything                                          |
+
+## Contrasting memory recall
 
 `MemoryStore.find_contrasting_positive` pulls a semantically-related
 *positive* memory when the current utterance turns negative — the moment

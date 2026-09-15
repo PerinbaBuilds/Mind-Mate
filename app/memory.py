@@ -74,18 +74,49 @@ class MemoryStore:
                 )
                 """
             )
+            # Durable facts about the person (name, ongoing threads, people
+            # who matter to them). Survives "new session" on purpose.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile (
+                    user_id TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                )
+                """
+            )
+            # One row per finished conversation, so a returning user can be
+            # greeted with what actually happened last time.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_summary (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    session_id INTEGER NOT NULL,
+                    summary TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            # session_id was added after the first release; older DBs need it.
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(memory)")}
+            if "session_id" not in cols:
+                c.execute("ALTER TABLE memory ADD COLUMN session_id INTEGER NOT NULL DEFAULT 1")
 
     # -- writes ----------------------------------------------------------
 
-    def add(self, item: MemoryItem) -> int:
+    def add(self, item: MemoryItem, session_id: int = 1) -> int:
         with self._lock, self._conn() as c:
             cur = c.execute(
                 """
-                INSERT INTO memory(user_id, role, text, emotion_json, topic_tags, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO memory(user_id, session_id, role, text, emotion_json, topic_tags, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.user_id,
+                    session_id,
                     item.role,
                     item.text,
                     item.emotion.model_dump_json(),
@@ -96,9 +127,98 @@ class MemoryStore:
             return int(cur.lastrowid or 0)
 
     def wipe(self, user_id: str) -> None:
+        """Forget this person entirely — conversations, profile, everything."""
         with self._lock, self._conn() as c:
             c.execute("DELETE FROM memory WHERE user_id = ?", (user_id,))
             c.execute("DELETE FROM crisis_log WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM profile WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM session_summary WHERE user_id = ?", (user_id,))
+
+    # -- sessions --------------------------------------------------------
+
+    def current_session_id(self, user_id: str) -> int:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(session_id) AS s FROM memory WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return int(row["s"] or 1)
+
+    def start_new_session(self, user_id: str) -> int:
+        return self.current_session_id(user_id) + 1
+
+    def session_turns(self, user_id: str, session_id: int) -> list[MemoryItem]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM memory WHERE user_id = ? AND session_id = ? ORDER BY id",
+                (user_id, session_id),
+            ).fetchall()
+        return [self._row_to_item(r) for r in rows]
+
+    # -- durable profile -------------------------------------------------
+
+    def set_fact(self, user_id: str, key: str, value: str) -> None:
+        key = key.strip().lower()[:60]
+        value = value.strip()[:300]
+        if not key or not value:
+            return
+        with self._lock, self._conn() as c:
+            c.execute(
+                """
+                INSERT INTO profile(user_id, key, value, updated_at) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+                """,
+                (user_id, key, value, datetime.utcnow().isoformat()),
+            )
+
+    def get_facts(self, user_id: str) -> dict[str, str]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT key, value FROM profile WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,),
+            ).fetchall()
+        return {r["key"]: r["value"] for r in rows}
+
+    def add_session_summary(self, user_id: str, session_id: int, summary: str) -> None:
+        summary = summary.strip()
+        if not summary:
+            return
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT INTO session_summary(user_id, session_id, summary, created_at) VALUES (?, ?, ?, ?)",
+                (user_id, session_id, summary, datetime.utcnow().isoformat()),
+            )
+
+    def recent_summaries(self, user_id: str, n: int = 4) -> list[tuple[str, datetime]]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT summary, created_at FROM session_summary WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, n),
+            ).fetchall()
+        return [(r["summary"], datetime.fromisoformat(r["created_at"])) for r in rows]
+
+    def has_history(self, user_id: str) -> bool:
+        return bool(self.get_facts(user_id) or self.recent_summaries(user_id, 1))
+
+    def digest(self, user_id: str) -> str:
+        """A short 'what I remember about you' block injected into the prompt."""
+        facts = self.get_facts(user_id)
+        summaries = self.recent_summaries(user_id, 4)
+        if not facts and not summaries:
+            return ""
+        lines: list[str] = []
+        name = facts.pop("name", None)
+        if name:
+            lines.append(f"Their name is {name}.")
+        for k, v in list(facts.items())[:10]:
+            lines.append(f"- {k}: {v}")
+        if summaries:
+            lines.append("Previous conversations (most recent first):")
+            now = datetime.utcnow()
+            for text, when in summaries:
+                days = (now - when).days
+                ago = "today" if days <= 0 else ("yesterday" if days == 1 else f"{days} days ago")
+                lines.append(f"- ({ago}) {text}")
+        return "\n".join(lines)
 
     def log_crisis(self, user_id: str, level: int, text: str) -> None:
         with self._lock, self._conn() as c:

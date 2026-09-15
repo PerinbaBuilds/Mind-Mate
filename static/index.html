@@ -25,7 +25,7 @@
     </div>
     <div class="topbar-right">
       <div id="status" class="status pill"><span class="dot"></span><span id="status-label">connecting…</span></div>
-      <button id="reset" class="ghost" title="Clear session memory">new session</button>
+      <button id="reset" class="ghost" title="Start a fresh conversation — Mind-Mate still remembers you">new session</button>
     </div>
   </header>
 
@@ -67,6 +67,16 @@
         <div class="stat">
           <span class="stat-k">arousal</span>
           <div class="bar"><div id="bar-aro" class="bar-fill"></div></div>
+        </div>
+      </div>
+
+      <div class="remember">
+        <div class="remember-head">
+          <span class="stat-k">what I remember about you</span>
+          <button id="forget" class="link-btn" title="Erase everything Mind-Mate knows about you">forget me</button>
+        </div>
+        <div id="remember-body" class="remember-body">
+          <span class="remember-empty">We haven't met properly yet.</span>
         </div>
       </div>
     </aside>

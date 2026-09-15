@@ -189,9 +189,52 @@ async function refreshStatus() {
 }
 refreshStatus();
 
-// Greeting
+// ---------- Long-term memory panel ----------
+const rememberBody = document.getElementById("remember-body");
+const forgetBtn = document.getElementById("forget");
+
+function renderMemory(m) {
+  if (!m) return;
+  const bits = [];
+  if (m.name) bits.push(`<div class="mem-name">${esc(m.name)}</div>`);
+  (m.facts || []).forEach((f) => {
+    bits.push(
+      `<div class="mem-fact"><span class="mem-k">${esc(f.key.replace(/_/g, " "))}</span>${esc(f.value)}</div>`
+    );
+  });
+  (m.sessions || []).forEach((s) => {
+    bits.push(`<div class="mem-session">${esc(s.summary)}</div>`);
+  });
+  rememberBody.innerHTML = bits.length
+    ? bits.join("")
+    : '<span class="remember-empty">We haven\'t met properly yet.</span>';
+}
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+// ---------- Opening the conversation ----------
 setMood("neutral");
-addBotMsg("Hey. I'm Mind-Mate — think of me as someone who's here to listen. What's up?");
+
+async function openConversation() {
+  showTyping();
+  try {
+    const r = await fetch(`/api/greeting?user_id=${encodeURIComponent(USER_ID)}`);
+    const j = await r.json();
+    hideTyping();
+    startTalking();
+    addBotMsg(j.reply);
+    setTimeout(stopTalking, Math.min(3500, 400 + j.reply.length * 25));
+    renderMemory(j.remembers);
+  } catch {
+    hideTyping();
+    addBotMsg("Hey, I'm Mind-Mate. I'm here to listen — what's going on with you today?");
+  }
+}
+openConversation();
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -233,15 +276,43 @@ form.addEventListener("submit", async (e) => {
 });
 
 resetBtn.addEventListener("click", async () => {
-  if (!confirm("Clear this session's memory and start over?")) return;
+  resetBtn.disabled = true;
+  log.innerHTML = "";
+  sosBox.classList.add("hidden");
+  setMood("neutral");
+  setBars(0, 0);
+  showTyping();
   try {
-    await fetch("/api/reset", { method: "POST" });
+    const r = await fetch(`/api/new_session?user_id=${encodeURIComponent(USER_ID)}`, {
+      method: "POST",
+    });
+    const j = await r.json();
+    hideTyping();
+    startTalking();
+    addBotMsg(j.reply);
+    setTimeout(stopTalking, Math.min(3500, 400 + j.reply.length * 25));
+    renderMemory(j.remembers);
+  } catch (e) {
+    hideTyping();
+    addBotMsg(`Couldn't start a new session: ${e.message}`);
+  } finally {
+    resetBtn.disabled = false;
+    input.focus();
+  }
+});
+
+forgetBtn.addEventListener("click", async () => {
+  if (!confirm("Erase everything Mind-Mate remembers about you? This can't be undone.")) return;
+  try {
+    const r = await fetch(`/api/forget?user_id=${encodeURIComponent(USER_ID)}`, { method: "POST" });
+    const j = await r.json();
     log.innerHTML = "";
     sosBox.classList.add("hidden");
     setMood("neutral");
     setBars(0, 0);
-    addBotMsg("Fresh slate. What would you like to talk about?");
+    addBotMsg(j.reply);
+    renderMemory(j.remembers);
   } catch (e) {
-    addBotMsg(`Reset failed: ${e.message}`);
+    addBotMsg(`Couldn't clear memory: ${e.message}`);
   }
 });
