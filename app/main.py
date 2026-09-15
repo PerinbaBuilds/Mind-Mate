@@ -14,10 +14,13 @@ from .llm import TherapistLLM
 from .memory import default_store
 from .models import ChatRequest, ChatResponse, MemoryItem
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
+
+# Load the .env from the project root explicitly so it works no matter
+# which directory uvicorn is launched from. override=True lets the file
+# win over anything already in the shell environment.
+load_dotenv(BASE_DIR / ".env", override=True)
 
 app = FastAPI(title="Mind-Mate", version="0.2.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -31,12 +34,18 @@ def index() -> FileResponse:
     return FileResponse(str(STATIC_DIR / "index.html"))
 
 
+@app.get("/favicon.ico")
+def favicon() -> FileResponse:
+    return FileResponse(str(STATIC_DIR / "favicon.svg"), media_type="image/svg+xml")
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {
         "status": "ok",
         "llm_online": _llm.online,
         "provider": _llm.name,
+        "reason": _llm.reason,
     }
 
 

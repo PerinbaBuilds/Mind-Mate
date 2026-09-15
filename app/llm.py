@@ -96,6 +96,27 @@ def _parse_reply(raw: str) -> tuple[str, str, bool]:
 # ---------------------------------------------------------------------------
 
 
+import random
+
+_MOCK_POSITIVE = [
+    "Wait, that's amazing — tell me everything! How did it feel?",
+    "Ohh that's huge, congratulations! What's the part you're most proud of?",
+    "Yesss! I love hearing that. Walk me through it?",
+    "That's genuinely great news. What happened?",
+]
+_MOCK_NEGATIVE = [
+    "Oof, that sounds really heavy. What's going on?",
+    "I'm sorry, that sounds hard. Talk to me — what happened?",
+    "Mm, that stings. I'm here — tell me more?",
+    "That sounds like a lot to carry. What's weighing on you most?",
+]
+_MOCK_NEUTRAL = [
+    "I'm here — what's on your mind?",
+    "Go on, I'm listening. What's happening with you?",
+    "Tell me more — what's up?",
+]
+
+
 def _mock(message: str, emotion: EmotionState, sos_level: int) -> tuple[str, str, bool]:
     if sos_level >= 2:
         return (
@@ -104,15 +125,11 @@ def _mock(message: str, emotion: EmotionState, sos_level: int) -> tuple[str, str
             "sadness",
             False,
         )
+    if emotion.valence > 0.25:
+        return (random.choice(_MOCK_POSITIVE), "joy", False)
     if emotion.valence < -0.2:
-        return (
-            "Oof, that sounds heavy. Talk to me — what's going on?",
-            "sadness",
-            False,
-        )
-    if emotion.valence > 0.3:
-        return ("Ohh I love that for you! Tell me more?", "joy", False)
-    return ("Mm, I'm listening. What's on your mind?", "neutral", False)
+        return (random.choice(_MOCK_NEGATIVE), "sadness", False)
+    return (random.choice(_MOCK_NEUTRAL), "neutral", False)
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +143,8 @@ class _GroqProvider:
     def __init__(self) -> None:
         from groq import Groq  # local import so mock mode has no hard dep
 
-        self.client = Groq(api_key=os.environ["GROQ_API_KEY"].strip())
-        self.model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+        self.client = Groq(api_key=_env("GROQ_API_KEY"))
+        self.model = _env("GROQ_MODEL") or "llama-3.3-70b-versatile"
 
     def complete(self, system: str, messages: list[dict]) -> str:
         resp = self.client.chat.completions.create(
@@ -146,8 +163,8 @@ class _AnthropicProvider:
     def __init__(self) -> None:
         import anthropic
 
-        self.client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"].strip())
-        self.model = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
+        self.client = anthropic.Anthropic(api_key=_env("ANTHROPIC_API_KEY"))
+        self.model = _env("ANTHROPIC_MODEL") or "claude-3-5-sonnet-latest"
 
     def complete(self, system: str, messages: list[dict]) -> str:
         resp = self.client.messages.create(
@@ -165,24 +182,34 @@ class _AnthropicProvider:
 # ---------------------------------------------------------------------------
 
 
+def _env(name: str) -> str:
+    """Read an env var, tolerating a UTF-8 BOM that Windows PowerShell's
+    `Out-File -Encoding utf8` prepends to the first line of a .env file."""
+    val = os.environ.get(name) or os.environ.get("﻿" + name) or ""
+    return val.strip().strip('"').strip("'").lstrip("﻿")
+
+
 class TherapistLLM:
     def __init__(self) -> None:
-        pref = os.environ.get("LLM_PROVIDER", "").lower().strip()
+        self.reason = ""
+        pref = _env("LLM_PROVIDER").lower()
         self.provider = self._pick(pref)
 
     def _pick(self, pref: str):
+        groq_key = _env("GROQ_API_KEY")
+        anthropic_key = _env("ANTHROPIC_API_KEY")
         try:
-            if pref == "groq" and os.environ.get("GROQ_API_KEY"):
+            if (pref == "groq" or not pref) and groq_key:
                 return _GroqProvider()
-            if pref == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
+            if (pref == "anthropic" or not pref) and anthropic_key:
                 return _AnthropicProvider()
-            if not pref:
-                if os.environ.get("GROQ_API_KEY"):
-                    return _GroqProvider()
-                if os.environ.get("ANTHROPIC_API_KEY"):
-                    return _AnthropicProvider()
-        except Exception:
+        except Exception as exc:
+            self.reason = f"provider init failed: {exc}"
             return None
+        if not groq_key and not anthropic_key:
+            self.reason = "no API key found in .env (set GROQ_API_KEY)"
+        else:
+            self.reason = f"LLM_PROVIDER={pref!r} but its key is missing"
         return None
 
     @property

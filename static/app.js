@@ -178,7 +178,9 @@ async function refreshStatus() {
     const r = await fetch("/api/health");
     const j = await r.json();
     statusPill.classList.toggle("offline", !j.llm_online);
-    statusLabel.textContent = j.llm_online ? j.provider : "offline demo · add GROQ_API_KEY";
+    statusLabel.textContent = j.llm_online
+      ? j.provider
+      : `offline · ${j.reason || "add GROQ_API_KEY"}`;
   } catch {
     statusPill.classList.add("offline");
     statusLabel.textContent = "server unreachable";
