@@ -99,21 +99,22 @@ def _parse_reply(raw: str) -> tuple[str, str, bool]:
 import random
 
 _MOCK_POSITIVE = [
-    "Wait, that's amazing — tell me everything! How did it feel?",
-    "Ohh that's huge, congratulations! What's the part you're most proud of?",
-    "Yesss! I love hearing that. Walk me through it?",
-    "That's genuinely great news. What happened?",
+    "Wait, that's genuinely amazing — congratulations! What's the part you're proudest of?",
+    "Ohh I love this for you! How long had you been working toward it?",
+    "Yes! That's huge. Tell me how it actually went down.",
+    "That honestly made me smile. What did that moment feel like for you?",
 ]
 _MOCK_NEGATIVE = [
-    "Oof, that sounds really heavy. What's going on?",
-    "I'm sorry, that sounds hard. Talk to me — what happened?",
-    "Mm, that stings. I'm here — tell me more?",
-    "That sounds like a lot to carry. What's weighing on you most?",
+    "Oof, I'm really sorry — that sounds heavy. Do you want to talk through what happened?",
+    "That sounds genuinely hard. I'm right here — what's been the toughest part?",
+    "Mm, that stings, and it makes sense that it does. What's weighing on you most?",
+    "I hate that you're going through this. Tell me more — I'm listening properly.",
 ]
 _MOCK_NEUTRAL = [
-    "I'm here — what's on your mind?",
-    "Go on, I'm listening. What's happening with you?",
-    "Tell me more — what's up?",
+    "Ooh, tell me more about that — I'm curious where it's coming from.",
+    "I'm with you. What's been on your mind around it?",
+    "Go on — what's the story there?",
+    "That's interesting. How are you feeling about it, honestly?",
 ]
 
 
