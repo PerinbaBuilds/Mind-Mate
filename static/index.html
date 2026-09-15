@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Mind-Mate</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Mind-Mate</h1>
+      <span class="tag">virtual listening companion · MVP</span>
+    </div>
+    <div id="status" class="status">…</div>
+  </header>
+
+  <main class="stage">
+    <section class="face" aria-hidden="true">
+      <div class="oled eyes">
+        <div class="eye left"><div class="pupil"></div></div>
+        <div class="eye right"><div class="pupil"></div></div>
+      </div>
+      <div class="oled mouth">
+        <svg viewBox="0 0 200 60" preserveAspectRatio="none">
+          <path id="mouth-path" d="M10 30 Q100 30 190 30" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+        </svg>
+      </div>
+      <div class="face-caption">
+        <span id="mood-label">neutral</span>
+      </div>
+    </section>
+
+    <section class="chat">
+      <div id="log" class="log" role="log" aria-live="polite"></div>
+
+      <div id="sos" class="sos hidden">
+        <strong>Safety note:</strong>
+        <span>If you are in immediate danger, please contact iCall India at 9152987821 or the Vandrevala Foundation Helpline at 1860-2662-345 (24x7, free).</span>
+      </div>
+
+      <form id="form" class="composer">
+        <input id="input" autocomplete="off" placeholder="Say what's on your mind…" required />
+        <button type="submit" id="send">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
