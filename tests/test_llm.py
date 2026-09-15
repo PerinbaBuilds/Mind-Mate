@@ -66,5 +66,5 @@ def test_history_and_context_are_forwarded():
     # history + current context are both in the messages payload
     assert fake.last_messages[0]["content"] == "I won my hackathon today"
     assert fake.last_messages[1]["content"] == "that's huge!"
-    assert "[RECALLED_MEMORY]" in fake.last_messages[-1]["content"]
+    assert "[RECALLED_MEMORY" in fake.last_messages[-1]["content"]
     assert "[USER] but dad" in fake.last_messages[-1]["content"]

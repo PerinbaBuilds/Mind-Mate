@@ -36,20 +36,36 @@ def _context_block(
     sos_level: int,
     recalled: Optional[MemoryItem],
     digest: str = "",
+    recall_kind: str = "related_past",
+    trend: str = "steady",
 ) -> str:
     lines = []
     if digest:
         lines.append(f"[WHAT_YOU_REMEMBER_ABOUT_THEM]\n{digest}")
-    lines += [
-        f"[LEXICON_EMOTION_HINT] label={emotion.label} valence={emotion.valence} arousal={emotion.arousal}",
-        f"[SOS_LEVEL] {sos_level}",
-    ]
+    lines.append(
+        f"[EMOTION_READ] they sound {emotion.label} "
+        f"(valence {emotion.valence:+.2f}, intensity {emotion.arousal:.2f}); "
+        f"mood trend: {trend}"
+    )
+    lines.append(f"[SOS_LEVEL] {sos_level}")
     if sos_level >= 2:
         lines.append(f"[CRISIS_RESOURCES] {CRISIS_RESOURCE_LINE}")
     if recalled is not None:
-        lines.append(
-            f"[RECALLED_MEMORY] (from {recalled.created_at.date().isoformat()}): {recalled.text}"
-        )
+        when = recalled.created_at.date().isoformat()
+        if recall_kind == "contrasting_positive":
+            lines.append(
+                f"[RECALLED_MEMORY kind=contrasting_positive from={when}] {recalled.text}\n"
+                "They are low right now and this is a genuinely good moment from their "
+                "past on a related theme. Bring it in ONLY if it would land as caring "
+                "rather than dismissive — never as 'but remember the good times'. "
+                "Acknowledge what hurts first."
+            )
+        else:
+            lines.append(
+                f"[RECALLED_MEMORY kind=related_past from={when}] {recalled.text}\n"
+                "They have talked about this before. Reference it naturally for "
+                "continuity, the way a friend picks up a thread."
+            )
     lines.append(f"[USER] {message}")
     return "\n".join(lines)
 
@@ -61,6 +77,8 @@ def _build_messages(
     recalled: Optional[MemoryItem],
     history: list[MemoryItem],
     digest: str = "",
+    recall_kind: str = "related_past",
+    trend: str = "steady",
 ) -> list[dict]:
     msgs: list[dict] = []
     for item in history:
@@ -71,7 +89,12 @@ def _build_messages(
             }
         )
     msgs.append(
-        {"role": "user", "content": _context_block(message, emotion, sos_level, recalled, digest)}
+        {
+            "role": "user",
+            "content": _context_block(
+                message, emotion, sos_level, recalled, digest, recall_kind, trend
+            ),
+        }
     )
     return msgs
 
@@ -270,12 +293,16 @@ class TherapistLLM:
         recalled: Optional[MemoryItem],
         history: list[MemoryItem],
         digest: str = "",
+        recall_kind: str = "related_past",
+        trend: str = "steady",
     ) -> tuple[str, str, bool]:
         """Return (reply_text, mood_label, used_memory)."""
         if self.provider is None:
             return _mock(message, emotion, sos_level)
 
-        msgs = _build_messages(message, emotion, sos_level, recalled, history, digest)
+        msgs = _build_messages(
+            message, emotion, sos_level, recalled, history, digest, recall_kind, trend
+        )
         try:
             raw = self.provider.complete(_system_prompt(), msgs)
             return _parse_reply(raw)

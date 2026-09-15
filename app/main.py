@@ -65,6 +65,29 @@ def memory_view(user_id: str = "demo-user") -> dict:
     return _memory_view(user_id)
 
 
+@app.get("/api/sessions")
+def list_sessions(user_id: str = "demo-user") -> dict:
+    return {"sessions": _store.list_sessions(user_id)}
+
+
+@app.get("/api/sessions/{session_id}")
+def session_transcript(session_id: int, user_id: str = "demo-user") -> dict:
+    turns = _store.session_turns(user_id, session_id)
+    return {
+        "session_id": session_id,
+        "turns": [
+            {
+                "role": t.role,
+                "text": t.text,
+                "mood": t.emotion.label,
+                "valence": t.emotion.valence,
+                "at": t.created_at.isoformat(),
+            }
+            for t in turns
+        ],
+    }
+
+
 def _memory_view(user_id: str) -> dict:
     facts = _store.get_facts(user_id)
     return {
@@ -93,6 +116,7 @@ def new_session(user_id: str = "demo-user") -> dict:
         for k, v in facts.items():
             _store.set_fact(user_id, k, v)
 
+    _store.start_new_session(user_id)
     digest = _store.digest(user_id)
     return {
         "reply": _llm.greeting(digest),
@@ -114,8 +138,9 @@ def chat(req: ChatRequest) -> ChatResponse:
     sos = crisis.assess(req.message)
     sid = _store.current_session_id(req.user_id)
 
-    recalled = _store.find_contrasting_positive(req.user_id, req.message, emo)
     history = _store.session_turns(req.user_id, sid)[-12:]
+    trend = emotion.trajectory(emo, [h.emotion for h in history if h.role == "user"])
+    recall = _store.recall_for(req.user_id, req.message, emo)
     digest = _store.digest(req.user_id)
 
     _store.add(
@@ -128,12 +153,17 @@ def chat(req: ChatRequest) -> ChatResponse:
         message=req.message,
         emotion=emo,
         sos_level=sos,
-        recalled=recalled,
+        recalled=recall.item if recall else None,
         history=history,
         digest=digest,
+        recall_kind=recall.kind if recall else "related_past",
+        trend=trend,
     )
+    # Record which memory was surfaced so recall stays paced, not constant.
     _store.add(
-        MemoryItem(user_id=req.user_id, role="assistant", text=reply_text, emotion=emo), sid
+        MemoryItem(user_id=req.user_id, role="assistant", text=reply_text, emotion=emo),
+        sid,
+        recalled_id=(recall.item.id if (recall and used_memory) else None),
     )
 
     # If the LLM didn't clearly identify a mood, fall back to the lexicon label.
@@ -144,7 +174,7 @@ def chat(req: ChatRequest) -> ChatResponse:
         emotion=emo,
         display_mood=display_mood,
         sos_level=sos,
-        recalled_memory=(recalled.text if used_memory and recalled else None),
+        recalled_memory=(recall.item.text if used_memory and recall else None),
         used_memory=used_memory,
         provider=_llm.name,
     )

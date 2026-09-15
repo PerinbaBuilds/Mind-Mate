@@ -61,6 +61,34 @@ def test_forget_clears_everything():
     assert not s.has_history("u")
 
 
+def test_new_session_is_persisted_immediately():
+    """Regression: start_new_session used to compute an id without storing it,
+    so the next message fell back into the previous conversation."""
+    s = _store()
+    s.add(MemoryItem(user_id="u", role="user", text="first chat"), s.current_session_id("u"))
+
+    new_id = s.start_new_session("u")
+    # before a single message is written to it, it must already be current
+    assert s.current_session_id("u") == new_id
+
+    s.add(MemoryItem(user_id="u", role="user", text="second chat"), s.current_session_id("u"))
+    assert [t.text for t in s.session_turns("u", new_id)] == ["second chat"]
+    assert [t.text for t in s.session_turns("u", new_id - 1)] == ["first chat"]
+
+
+def test_list_sessions_newest_first_with_current_flag():
+    s = _store()
+    s.add(MemoryItem(user_id="u", role="user", text="a"), s.current_session_id("u"))
+    s.add_session_summary("u", 1, "The first chat.")
+    s.start_new_session("u")
+    s.add(MemoryItem(user_id="u", role="user", text="b"), s.current_session_id("u"))
+
+    sessions = s.list_sessions("u")
+    assert [x["session_id"] for x in sessions] == [2, 1]
+    assert sessions[0]["is_current"] is True
+    assert sessions[1]["summary"] == "The first chat."
+
+
 def test_fact_update_overwrites():
     s = _store()
     s.set_fact("u", "mood_trend", "struggling")

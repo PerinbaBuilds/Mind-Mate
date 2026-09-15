@@ -14,11 +14,21 @@ import os
 import re
 import sqlite3
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from .models import EmotionState, MemoryItem
+
+
+@dataclass
+class Recall:
+    """A past moment chosen as worth mentioning, and why."""
+
+    item: MemoryItem
+    kind: str  # "contrasting_positive" | "related_past"
+    score: float
 
 _STOP = {
     "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "in",
@@ -101,18 +111,34 @@ class MemoryStore:
                 """
             )
             # session_id was added after the first release; older DBs need it.
+            # Which conversation a user is currently in. Needs to be stored:
+            # deriving it from MAX(memory.session_id) silently drops a brand
+            # new session on the floor until its first message is written.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_state (
+                    user_id TEXT PRIMARY KEY,
+                    current_session INTEGER NOT NULL
+                )
+                """
+            )
             cols = {r["name"] for r in c.execute("PRAGMA table_info(memory)")}
             if "session_id" not in cols:
                 c.execute("ALTER TABLE memory ADD COLUMN session_id INTEGER NOT NULL DEFAULT 1")
+            if "recalled_id" not in cols:
+                c.execute("ALTER TABLE memory ADD COLUMN recalled_id INTEGER")
 
     # -- writes ----------------------------------------------------------
 
-    def add(self, item: MemoryItem, session_id: int = 1) -> int:
+    def add(
+        self, item: MemoryItem, session_id: int = 1, recalled_id: Optional[int] = None
+    ) -> int:
         with self._lock, self._conn() as c:
             cur = c.execute(
                 """
-                INSERT INTO memory(user_id, session_id, role, text, emotion_json, topic_tags, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO memory(user_id, session_id, role, text, emotion_json,
+                                   topic_tags, created_at, recalled_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     item.user_id,
@@ -122,6 +148,7 @@ class MemoryStore:
                     item.emotion.model_dump_json(),
                     json.dumps(item.topic_tags),
                     item.created_at.isoformat(),
+                    recalled_id,
                 ),
             )
             return int(cur.lastrowid or 0)
@@ -133,18 +160,66 @@ class MemoryStore:
             c.execute("DELETE FROM crisis_log WHERE user_id = ?", (user_id,))
             c.execute("DELETE FROM profile WHERE user_id = ?", (user_id,))
             c.execute("DELETE FROM session_summary WHERE user_id = ?", (user_id,))
+            c.execute("DELETE FROM user_state WHERE user_id = ?", (user_id,))
 
     # -- sessions --------------------------------------------------------
 
     def current_session_id(self, user_id: str) -> int:
         with self._conn() as c:
             row = c.execute(
+                "SELECT current_session FROM user_state WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if row is not None:
+                return int(row["current_session"])
+            # Pre-existing data from before user_state existed.
+            legacy = c.execute(
                 "SELECT MAX(session_id) AS s FROM memory WHERE user_id = ?", (user_id,)
             ).fetchone()
-        return int(row["s"] or 1)
+        return int(legacy["s"] or 1)
 
     def start_new_session(self, user_id: str) -> int:
-        return self.current_session_id(user_id) + 1
+        nxt = self.current_session_id(user_id) + 1
+        with self._lock, self._conn() as c:
+            c.execute(
+                """
+                INSERT INTO user_state(user_id, current_session) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET current_session = excluded.current_session
+                """,
+                (user_id, nxt),
+            )
+        return nxt
+
+    def list_sessions(self, user_id: str) -> list[dict]:
+        """Past conversations, newest first, for the history browser."""
+        with self._conn() as c:
+            rows = c.execute(
+                """
+                SELECT m.session_id AS sid,
+                       COUNT(*) AS turns,
+                       MIN(m.created_at) AS started_at,
+                       MAX(m.created_at) AS ended_at,
+                       (SELECT s.summary FROM session_summary s
+                         WHERE s.user_id = m.user_id AND s.session_id = m.session_id
+                         ORDER BY s.id DESC LIMIT 1) AS summary
+                  FROM memory m
+                 WHERE m.user_id = ?
+                 GROUP BY m.session_id
+                 ORDER BY m.session_id DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        current = self.current_session_id(user_id)
+        return [
+            {
+                "session_id": r["sid"],
+                "turns": r["turns"],
+                "started_at": r["started_at"],
+                "ended_at": r["ended_at"],
+                "summary": r["summary"],
+                "is_current": r["sid"] == current,
+            }
+            for r in rows
+        ]
 
     def session_turns(self, user_id: str, session_id: int) -> list[MemoryItem]:
         with self._conn() as c:
@@ -236,6 +311,89 @@ class MemoryStore:
                 (user_id, n),
             ).fetchall()
         return [self._row_to_item(r) for r in reversed(rows)]
+
+    def turns_since_recall(self, user_id: str) -> int:
+        """How many assistant turns since a memory was last surfaced.
+
+        Used to pace recall — bringing up the past every single turn feels
+        like a gimmick rather than like being remembered.
+        """
+        with self._conn() as c:
+            last = c.execute(
+                "SELECT MAX(id) AS m FROM memory WHERE user_id = ? AND recalled_id IS NOT NULL",
+                (user_id,),
+            ).fetchone()["m"]
+            if last is None:
+                return 999
+            n = c.execute(
+                "SELECT COUNT(*) AS n FROM memory WHERE user_id = ? AND role = 'assistant' AND id > ?",
+                (user_id, last),
+            ).fetchone()["n"]
+        return int(n)
+
+    def recall_for(
+        self,
+        user_id: str,
+        current_text: str,
+        current: EmotionState,
+        min_gap: int = 3,
+    ) -> Optional[Recall]:
+        """Pick a past moment worth bringing up right now — or nothing.
+
+        Two strategies, chosen by how the person sounds:
+          * they're low  -> a related *positive* memory, to offer perspective
+          * otherwise    -> a related past moment, for genuine continuity
+
+        Returns None far more often than not; that restraint is the point.
+        """
+        if self.turns_since_recall(user_id) < min_gap:
+            return None
+
+        cur_tokens = _tokens(current_text)
+        if len(cur_tokens) < 2:
+            return None
+
+        with self._conn() as c:
+            rows = c.execute(
+                """
+                SELECT * FROM memory
+                 WHERE user_id = ? AND role = 'user'
+                 ORDER BY id DESC LIMIT 300
+                """,
+                (user_id,),
+            ).fetchall()
+
+        low = current.valence < -0.2
+        kind = "contrasting_positive" if low else "related_past"
+
+        best: Optional[tuple[float, MemoryItem]] = None
+        # Skip the immediately preceding turn: it is already in the model's
+        # context, so "recalling" it would just be repeating them back.
+        for r in rows[1:]:
+            item = self._row_to_item(r)
+            item_tokens = _tokens(item.text)
+            if not item_tokens:
+                continue
+
+            overlap = cur_tokens & item_tokens
+            if not overlap:
+                continue
+            # Jaccard keeps long rambling memories from dominating.
+            relevance = len(overlap) / len(cur_tokens | item_tokens)
+
+            if low:
+                if item.emotion.valence < 0.3:
+                    continue  # we want a genuinely good memory here
+                score = relevance * 2 + item.emotion.valence
+            else:
+                score = relevance * 2 + abs(item.emotion.valence) * 0.3
+
+            if best is None or score > best[0]:
+                best = (score, item)
+
+        if best is None or best[0] < 0.45:
+            return None
+        return Recall(item=best[1], kind=kind, score=round(best[0], 3))
 
     def find_contrasting_positive(
         self, user_id: str, current_text: str, current: EmotionState

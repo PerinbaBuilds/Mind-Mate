@@ -141,6 +141,34 @@ function addBotMsg(text, meta) {
   log.scrollTop = log.scrollHeight;
 }
 
+// Reveal the reply the way a person types it — the mouth animates while the
+// words land, then settles. Far more alive than a block of text appearing.
+function addBotMsgTyped(text, meta) {
+  return new Promise((resolve) => {
+    const m = el("div", "msg bot");
+    const body = el("span");
+    m.appendChild(body);
+    log.appendChild(m);
+
+    const perChar = Math.max(9, Math.min(28, 1100 / Math.max(text.length, 1)));
+    let i = 0;
+    startTalking();
+    const tick = setInterval(() => {
+      // reveal in small chunks so long replies don't crawl
+      i = Math.min(text.length, i + (text.length > 160 ? 3 : 1));
+      body.textContent = text.slice(0, i);
+      log.scrollTop = log.scrollHeight;
+      if (i >= text.length) {
+        clearInterval(tick);
+        stopTalking();
+        if (meta) m.appendChild(el("span", "meta", meta));
+        log.scrollTop = log.scrollHeight;
+        resolve();
+      }
+    }, perChar);
+  });
+}
+
 function addRecall(text) {
   log.appendChild(el("div", "msg recall", `remembering: "${text}"`));
   log.scrollTop = log.scrollHeight;
@@ -225,9 +253,7 @@ async function openConversation() {
     const r = await fetch(`/api/greeting?user_id=${encodeURIComponent(USER_ID)}`);
     const j = await r.json();
     hideTyping();
-    startTalking();
-    addBotMsg(j.reply);
-    setTimeout(stopTalking, Math.min(3500, 400 + j.reply.length * 25));
+    await addBotMsgTyped(j.reply);
     renderMemory(j.remembers);
   } catch {
     hideTyping();
@@ -260,12 +286,10 @@ form.addEventListener("submit", async (e) => {
     sosBox.classList.toggle("hidden", j.sos_level < 2);
     if (j.recalled_memory) addRecall(j.recalled_memory);
 
-    startTalking();
     const meta = `${j.provider} · ${j.display_mood} · valence ${j.emotion.valence.toFixed(2)}${
       j.sos_level ? ` · sos ${j.sos_level}` : ""
     }`;
-    addBotMsg(j.reply, meta);
-    setTimeout(stopTalking, Math.min(3500, 400 + j.reply.length * 25));
+    await addBotMsgTyped(j.reply, meta);
   } catch (err) {
     hideTyping();
     addBotMsg(`Couldn't reach the server: ${err.message}`);
@@ -288,9 +312,7 @@ resetBtn.addEventListener("click", async () => {
     });
     const j = await r.json();
     hideTyping();
-    startTalking();
-    addBotMsg(j.reply);
-    setTimeout(stopTalking, Math.min(3500, 400 + j.reply.length * 25));
+    await addBotMsgTyped(j.reply);
     renderMemory(j.remembers);
   } catch (e) {
     hideTyping();
@@ -299,6 +321,105 @@ resetBtn.addEventListener("click", async () => {
     resetBtn.disabled = false;
     input.focus();
   }
+});
+
+// ---------- History drawer ----------
+const drawer = document.getElementById("drawer");
+const scrim = document.getElementById("drawer-scrim");
+const drawerBody = document.getElementById("drawer-body");
+
+function fmtWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + (iso.endsWith("Z") ? "" : "Z"));
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return sameDay
+    ? `Today, ${time}`
+    : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+}
+
+async function openDrawer() {
+  drawer.classList.remove("hidden");
+  scrim.classList.remove("hidden");
+  drawerBody.innerHTML = '<div class="drawer-empty">Loading…</div>';
+  try {
+    const r = await fetch(`/api/sessions?user_id=${encodeURIComponent(USER_ID)}`);
+    const { sessions } = await r.json();
+    if (!sessions.length) {
+      drawerBody.innerHTML = '<div class="drawer-empty">No conversations yet.</div>';
+      return;
+    }
+    drawerBody.innerHTML = "";
+    sessions.forEach((s) => drawerBody.appendChild(sessionCard(s)));
+  } catch (e) {
+    drawerBody.innerHTML = `<div class="drawer-empty">Couldn't load history: ${esc(e.message)}</div>`;
+  }
+}
+
+function sessionCard(s) {
+  const card = el("div", "sess");
+  const head = el("div", "sess-head");
+
+  const left = el("div");
+  left.appendChild(el("div", "sess-when", fmtWhen(s.started_at)));
+  const bits = [`${s.turns} message${s.turns === 1 ? "" : "s"}`];
+  if (s.summary) bits.push(s.summary);
+  left.appendChild(el("div", "sess-meta", bits.join(" · ")));
+  head.appendChild(left);
+
+  if (s.is_current) head.appendChild(el("span", "sess-badge", "current"));
+  const chev = document.createElement("span");
+  chev.className = "sess-chev";
+  chev.innerHTML =
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  head.appendChild(chev);
+  card.appendChild(head);
+
+  let loaded = false;
+  head.addEventListener("click", async () => {
+    const isOpen = card.classList.toggle("open");
+    if (!isOpen) {
+      const t = card.querySelector(".sess-turns");
+      if (t) t.remove();
+      return;
+    }
+    const box = el("div", "sess-turns");
+    box.appendChild(el("div", "t-who", "loading…"));
+    card.appendChild(box);
+    if (loaded) return;
+    try {
+      const r = await fetch(
+        `/api/sessions/${s.session_id}?user_id=${encodeURIComponent(USER_ID)}`
+      );
+      const { turns } = await r.json();
+      box.innerHTML = "";
+      turns.forEach((t) => {
+        const row = el("div", `t-row ${t.role}`);
+        row.appendChild(el("div", "t-who", t.role === "user" ? "You" : "Mind-Mate"));
+        row.appendChild(el("div", "t-text", t.text));
+        box.appendChild(row);
+      });
+      loaded = true;
+    } catch (e) {
+      box.innerHTML = "";
+      box.appendChild(el("div", "t-who", `couldn't load: ${e.message}`));
+    }
+  });
+
+  return card;
+}
+
+function closeDrawer() {
+  drawer.classList.add("hidden");
+  scrim.classList.add("hidden");
+}
+
+document.getElementById("history-btn").addEventListener("click", openDrawer);
+document.getElementById("drawer-close").addEventListener("click", closeDrawer);
+scrim.addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !drawer.classList.contains("hidden")) closeDrawer();
 });
 
 forgetBtn.addEventListener("click", async () => {
